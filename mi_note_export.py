@@ -365,8 +365,13 @@ def main() -> int:
     if args.prune and args.limit:
         print("  ! --limit 与 --prune 同用会误删其余笔记，已跳过清理", file=sys.stderr)
     elif args.prune:
+        # 只在真正存放笔记的子目录里清理。输出目录根下的 README.md 等文件不属于
+        # 任何笔记，绝不能被当成陈旧笔记删掉 —— 若输出目录本身是个 git 仓库，
+        # 原来的写法会把仓库自己的 README.md 一并删除。
         planned = {p.resolve() for p in plan.values()}
-        stale = [p for p in out.rglob("*.md") if p.resolve() not in planned]
+        note_dirs = {p.parent.resolve() for p in plan.values()}
+        stale = [p for p in out.rglob("*.md")
+                 if p.parent.resolve() in note_dirs and p.resolve() not in planned]
         for p in stale:
             p.unlink()
         print(f"  清理不在本次计划内的旧 Markdown {len(stale)} 个")
