@@ -39,7 +39,7 @@ python mi_note_export.py --limit 5
 python mi_note_export.py -o ./mi-notes
 ```
 
-中断后重跑会自动跳过已完成的部分，不会重复请求。
+中断后重跑会自动跳过已完成的部分，不会重复请求。默认支持增量同步。
 
 ### 5. 查看结果
 
@@ -53,6 +53,10 @@ mi-notes/
 ```
 
 每篇带 YAML frontmatter（标题、ID、文件夹、创建与修改时间），正文里的图片已改写为本地相对路径，用 Obsidian、Typora 打开可直接看图。
+
+## 待改进项
+
+增量同步目前只比对云端索引里的 `modifyDate`（毫秒时间码），没有内容哈希兜底，且每次仍要翻完整索引。
 
 ## ⚠️ 免责声明
 

@@ -8,6 +8,8 @@
     py -3 mi_note_export.py                    # 使用同目录 cookie.txt，导出到 ./mi-notes
     py -3 mi_note_export.py --limit 5          # 先小批量试跑
     py -3 mi_note_export.py -o D:/backup -r 3  # 指定输出目录并降低请求速率
+
+重复运行即增量同步：只拉新增的和云端 modifyDate 变新的笔记，其余复用 .cache。
 """
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import requests
+
+from mi_note_verify import SyncState, plan_sync
 
 BASE = "https://i.mi.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -94,40 +98,69 @@ class Client:
         return d["data"]
 
 
-def fetch_index(c: Client) -> tuple[list[dict], dict[str, str]]:
-    """翻页拉取全部笔记条目与文件夹。
+def _index_pass(c: Client, entries: dict[str, dict],
+                folders: dict[str, str]) -> tuple[int, int]:
+    """按 syncTag 翻完一遍全部分页，并入 entries，返回（本遍新出现条数, 页数）。
 
-    接口有两个反直觉之处：folders 并非只在首页返回，需逐页收集；中间页可能
-    返回不足 limit 条，必须以 lastPage 而非返回条数作为终止条件。
+    folders 并非只在首页返回，需逐页收集；中间页可能返回不足 limit 条，
+    必须以 lastPage 而非返回条数作为终止条件。
     """
-    entries: dict[str, dict] = {}
-    folders = dict(BUILTIN_FOLDERS)
-    tag, page = None, 0
+    new, tag, page = 0, None, 0
     while True:
         params = {"limit": 200}
         if tag:
             params["syncTag"] = tag
         d = c.json("/note/v2/full/page", **params)
         for e in d.get("entries") or []:
-            entries[e["id"]] = e
+            old = entries.get(e["id"])
+            if old is None:
+                new += 1
+            # 同一条可能在不同遍里带不同 modifyDate，保留更新的那份
+            if old is None or int(e.get("modifyDate") or 0) >= int(old.get("modifyDate") or 0):
+                entries[e["id"]] = e
         for f in d.get("folders") or []:
             folders[str(f["id"])] = f.get("subject") or f"folder_{f['id']}"
         page += 1
-        print(f"  第 {page} 页: +{len(d.get('entries') or [])} 条, "
-              f"+{len(d.get('folders') or [])} 文件夹 (累计 {len(entries)})")
         tag = d.get("syncTag")
         if d.get("lastPage") or not tag:
             break
-        if page > 200:  # 防御性上限，避免 syncTag 异常导致死循环
+        if page > 2000:  # 防御性上限，避免 syncTag 异常导致死循环
             print("  ! 页数超过上限，提前停止", file=sys.stderr)
             break
+    return new, page
+
+
+def fetch_index(c: Client, passes: int = 3) -> tuple[list[dict], dict[str, str]]:
+    """拉取全部笔记条目与文件夹，重复翻页直到条目集合不再增长。
+
+    为什么要翻多遍：实测同一账号连续全量翻页，返回的条目数并不稳定
+    （同一天内测到 792 / 870 / 915 / 918 条，逐次变多），单遍翻页会静默漏掉
+    笔记 —— 本仓库最初那份 792 条的备份就因此漏了 100 多条真实笔记。
+    备份宁可多花几个请求，也不能漏，所以这里取多遍的并集，直到某一遍
+    不再出现新 id 为止。
+    """
+    entries: dict[str, dict] = {}
+    folders = dict(BUILTIN_FOLDERS)
+    for i in range(1, max(1, passes) + 1):
+        new, pages = _index_pass(c, entries, folders)
+        print(f"  第 {i} 遍翻页: {pages} 页, 新出现 {new} 条 "
+              f"(累计 {len(entries)} 条, {len(folders)} 个文件夹)")
+        if new == 0:
+            break
+    else:
+        print(f"  ! 翻了 {passes} 遍仍在发现新笔记，索引尚未收敛；"
+              f"本次结果可能仍不完整，建议稍后再跑一次", file=sys.stderr)
     return list(entries.values()), folders
 
 
-def fetch_note(c: Client, note_id: str, cache: pathlib.Path) -> dict:
-    """拉取单条笔记详情，带本地缓存以支持断点续传。"""
+def fetch_note(c: Client, note_id: str, cache: pathlib.Path,
+               force: bool = False) -> dict:
+    """拉取单条笔记详情，带本地缓存以支持断点续传。
+
+    force=True 时忽略缓存重新拉取；由增量比对结果决定，见 mi_note_verify.plan_sync()。
+    """
     f = cache / f"{note_id}.json"
-    if f.exists():
+    if f.exists() and not force:
         try:
             return json.loads(f.read_text(encoding="utf-8"))
         except Exception:
@@ -265,10 +298,14 @@ def main() -> int:
     ap.add_argument("-w", "--workers", type=int, default=4, help="并发线程数（默认 4）")
     ap.add_argument("--limit", type=int, default=0, help="只导出最近 N 条（试跑用）")
     ap.add_argument("--no-assets", action="store_true", help="不下载图片等附件")
+    ap.add_argument("--full", action="store_true",
+                    help="忽略缓存重新拉取全部正文（默认只拉新增和云端有改动的）")
     ap.add_argument("--offline", action="store_true",
                     help="不联网，仅用 .cache 已有数据重新生成 Markdown（Cookie 过期时可用）")
     ap.add_argument("--prune", action="store_true",
                     help="删除输出目录中不属于本次计划的 .md（改名后清理旧文件用）")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只拉索引比对并报告增量，不下载正文、不写任何文件")
     args = ap.parse_args()
 
     out = pathlib.Path(args.out)
@@ -289,6 +326,10 @@ def main() -> int:
 
     c = Client(cookie, rate=args.rate)
 
+    state = SyncState.load(cache)
+    if state.last_sync:
+        print(f"上次同步: {state.last_sync}（清单 {len(state.notes)} 条）")
+
     if args.offline:
         print("[1/3] 离线模式：从本地缓存重建 ...")
         folders = (json.loads(folders_file.read_text(encoding="utf-8"))
@@ -304,18 +345,61 @@ def main() -> int:
     else:
         print("[1/3] 拉取笔记索引 ...")
         entries, folders = fetch_index(c)
-        folders_file.write_text(json.dumps(folders, ensure_ascii=False), encoding="utf-8")
+        if not args.dry_run:
+            folders_file.write_text(json.dumps(folders, ensure_ascii=False),
+                                    encoding="utf-8")
     entries.sort(key=lambda e: int(e.get("createDate") or 0))
     if args.limit:
         entries = entries[-args.limit:]
     print(f"  共 {len(entries)} 条笔记, {len(folders)} 个文件夹: "
           f"{', '.join(folders.values())}")
 
+    # 增量比对：只看索引里的 modifyDate 与清单记录，不读缓存正文
+    sync = None
+    refetch: set[str] = set()
+    if not args.offline:
+        sync = plan_sync(entries, state, force=args.full,
+                         detect_deleted=not args.limit)
+        refetch = sync.refetch
+        print("  " + sync.summary())
+        if args.limit:
+            # --limit 只截取了最近 N 条，此时「清单里有而索引里没有」不等于云端删了
+            print("  ! --limit 模式下跳过云端删除检测")
+        elif sync.deleted:
+            tail = "，--prune 会一并清理" if not args.prune else ""
+            print(f"  云端已删除 {len(sync.deleted)} 条，本地仍有备份{tail}")
+
     plan = plan_paths(entries, folders, out)
     dated = sum(1 for e in entries
                 if plan[e["id"]].stem != safe_name(note_title(e), e["id"]))
     print(f"  文件名: {len(entries) - dated} 条用 <标题>.md, "
           f"{dated} 条因重名用 <日期>-<标题>.md")
+
+    # 内容和输出路径都没变、文件也还在的笔记，连缓存 JSON 都不必读，整条跳过。
+    # 10 万条规模下这一步把「每次全量重写 Markdown」降为只写真正变化的那几条。
+    todo = entries
+    if sync:
+        skip = set()
+        for nid in sync.unchanged:
+            rel = state.path_of(nid)
+            if rel and rel == plan[nid].relative_to(out).as_posix() and plan[nid].exists():
+                skip.add(nid)
+        if skip:
+            print(f"  跳过 {len(skip)} 条（内容与路径均未变，不读缓存也不重写）")
+        todo = [e for e in entries if e["id"] not in skip]
+
+    if args.dry_run:
+        print("[2/3] --dry-run: 不下载、不写文件")
+        for label, ids in (("新增", sync.fresh if sync else []),
+                           ("有改动", sync.updated if sync else []),
+                           ("云端已删除", sync.deleted if sync else [])):
+            for nid in ids[:10]:
+                p = plan.get(nid)
+                print(f"  {label}: {nid} {p.relative_to(out).as_posix() if p else state.path_of(nid)}")
+            if len(ids) > 10:
+                print(f"  {label}: ... 另有 {len(ids) - 10} 条")
+        print(f"[3/3] 本次将处理 {len(todo)} 条（其中需联网拉正文 {len(refetch)} 条）")
+        return 0
 
     print(f"[2/3] 拉取正文并写出 Markdown (速率 {args.rate} req/s, {args.workers} 线程) ...")
     done, failed, assets_n = [0], [], [0]
@@ -324,7 +408,7 @@ def main() -> int:
     def work(e: dict) -> None:
         nid = e["id"]
         try:
-            entry = fetch_note(c, nid, cache)
+            entry = fetch_note(c, nid, cache, force=nid in refetch)
             try:
                 extra = json.loads(entry.get("extraInfo") or "{}")
             except Exception:
@@ -352,32 +436,60 @@ def main() -> int:
             dst.write_text(to_markdown(entry, folders, img_map), encoding="utf-8")
 
             with lock:
+                # 只有整条成功才登记进清单；失败的保留旧记录（或没有记录），
+                # 这样下次同步会自然重试，不会被误判为「已同步」
+                state.record(nid, entry.get("modifyDate"),
+                             dst.relative_to(out).as_posix())
                 done[0] += 1
-                if done[0] % 25 == 0 or done[0] == len(entries):
-                    print(f"  {done[0]}/{len(entries)} 条, 附件 {assets_n[0]} 个")
+                if done[0] % 25 == 0 or done[0] == len(todo):
+                    print(f"  {done[0]}/{len(todo)} 条, 附件 {assets_n[0]} 个")
         except Exception as ex:
             with lock:
                 failed.append((nid, str(ex)))
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        list(pool.map(work, entries))
+        list(pool.map(work, todo))
 
+    prune_cap = max(20, len(state.notes) // 20)
     if args.prune and args.limit:
         print("  ! --limit 与 --prune 同用会误删其余笔记，已跳过清理", file=sys.stderr)
+    elif args.prune and sync and len(sync.deleted) > prune_cap:
+        # 索引会漏返回（见 fetch_index），把「本次没看到」当成「云端已删除」有风险。
+        # 判定删除的数量异常大时宁可留垃圾，也不能删掉真笔记。
+        print(f"  ! 本次判定云端已删除 {len(sync.deleted)} 条，超过安全阈值 {prune_cap} 条，"
+              f"已跳过清理。请再跑一次确认不是索引漏返回。", file=sys.stderr)
     elif args.prune:
-        # 只在真正存放笔记的子目录里清理。输出目录根下的 README.md 等文件不属于
-        # 任何笔记，绝不能被当成陈旧笔记删掉 —— 若输出目录本身是个 git 仓库，
-        # 原来的写法会把仓库自己的 README.md 一并删除。
+        # 只在真正存放笔记的子目录里清理。备份目录根下的 README.md 等自有文件
+        # 不属于任何笔记，绝不能被当成陈旧笔记删掉。
         planned = {p.resolve() for p in plan.values()}
         note_dirs = {p.parent.resolve() for p in plan.values()}
-        stale = [p for p in out.rglob("*.md")
-                 if p.parent.resolve() in note_dirs and p.resolve() not in planned]
+        stale = {p.resolve() for p in out.rglob("*.md")
+                 if p.parent.resolve() in note_dirs and p.resolve() not in planned}
+        # 云端已删除的笔记，其文件夹可能已被清空而不在 note_dirs 里，靠清单补上
+        for nid in (sync.deleted if sync else []):
+            rel = state.path_of(nid)
+            if rel and (out / rel).exists():
+                stale.add((out / rel).resolve())
         for p in stale:
             p.unlink()
         print(f"  清理不在本次计划内的旧 Markdown {len(stale)} 个")
+        # 缓存副本和清单记录也要删，否则 --offline 重建会让已删除的笔记复活
+        for nid in (sync.deleted if sync else []):
+            (cache / f"{nid}.json").unlink(missing_ok=True)
+            state.forget(nid)
+        if sync and sync.deleted:
+            print(f"  清理云端已删除笔记的缓存 {len(sync.deleted)} 个")
+
+    state.save(notes=len(state.notes), offline=args.offline,
+               new=len(sync.fresh) if sync else 0,
+               updated=len(sync.updated) if sync else 0,
+               failed=len(failed))
 
     print("[3/3] 完成")
-    print(f"  成功 {done[0]} / {len(entries)} 条, 附件 {assets_n[0]} 个 -> {out.resolve()}")
+    skipped = len(entries) - len(todo)
+    print(f"  成功 {done[0]} / {len(todo)} 条"
+          + (f"（另有 {skipped} 条未变已跳过）" if skipped else "")
+          + f", 附件 {assets_n[0]} 个 -> {out.resolve()}")
     if failed:
         print(f"  失败 {len(failed)} 项（重跑本脚本会自动续传）:", file=sys.stderr)
         for nid, err in failed[:20]:
