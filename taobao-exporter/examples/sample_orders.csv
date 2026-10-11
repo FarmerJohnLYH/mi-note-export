@@ -1,0 +1,4 @@
+order_date,order_time,order_id,shop_name,item_title,item_url,item_sku,quantity,unit_price,actual_paid,order_status,order_detail_url,page_number_collected,collected_at
+2024-01-15,,1000000000000001,Sample Shop A,Example Product One (REDACTED),https://item.taobao.com/item.htm?id=000000000001,"Color: Red, Size: M",1,19.90,19.90,交易成功,https://trade.taobao.com/detail/orderDetail.htm?bizOrderId=1000000000000001,1,2024-01-20 10:00:00
+2024-02-03,,1000000000000002,Sample Shop B,Example Product Two (REDACTED),https://item.taobao.com/item.htm?id=000000000002,Default,2,8.50,17.00,交易成功,https://trade.taobao.com/detail/orderDetail.htm?bizOrderId=1000000000000002,1,2024-02-05 14:30:00
+2024-03-22,,1000000000000003,Sample Shop C,Example Product Three (REDACTED),https://item.taobao.com/item.htm?id=000000000003,"Style: Classic",1,128.00,118.00,交易关闭,https://trade.taobao.com/detail/orderDetail.htm?bizOrderId=1000000000000003,2,2024-03-25 09:15:00

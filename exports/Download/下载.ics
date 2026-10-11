@@ -1,0 +1,19 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+X-WR-CALNAME:左侧或右侧 AirPod 无法正常工作
+PRODID: Randevu
+X-WR-TIMEZONE;VALUE=TEXT:Asia/Shanghai
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+LOCATION:畅航－深圳领展店\n广东省深圳市福田区福华一路3号领展中心城L层RL1030B铺\, ( Mac 产品提供送修服务 )\, 深圳\, 广东\, 518000\, CN
+X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-TITLE="畅航－深圳领展店\n广东省深圳市福田区福华一路3号领展中心城L层RL1030B铺\, ( Mac 产品提供送修服务 )\, 深圳\, 广东\, 518000\, CN":geo:22.535159980173308,114.05901599999993
+DTSTAMP:20250920T130000
+URL;VALUE=URI:https://apple.gzchang.net
+DTSTART;TZID=Asia/Shanghai:20250920T130000
+SUMMARY:通过“Apple 支持”进行的预约 - AirPods
+DTEND;TZID=Asia/Shanghai:20250920T131500
+DESCRIPTION:Prepare for and Manage your reservation: https://getsupport.apple.com/GetCaseDetails?caseid=102698350335&locale=zh_CN
+UID:https://apple.gzchang.net20250920T130000
+END:VEVENT
+END:VCALENDAR

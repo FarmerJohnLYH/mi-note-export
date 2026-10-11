@@ -1,0 +1,531 @@
+﻿/** 对一帧信号执行回声消除 */
+
+// 导出函数：回声消除主函数，用于实时处理音频帧
+EXPORT void speex_echo_cancellation(SpeexEchoState *st, const spx_int16_t *in, const spx_int16_t *far_end, spx_int16_t *out)
+{
+    int i,j, chan, speak;  // 循环变量及索引：i,j为通用循环变量；chan为声道索引；speak为说话人索引
+    int N,M, C, K;         // 从状态结构体获取的关键参数：N为窗口大小；M为滤波器阶数相关；C为声道数；K为说话人数
+    spx_word32_t Syy,See,Sxx,Sdd, Sff;  // 32位字能量/互相关变量：Syy误差自能量；See远端自能量；Sxx远端自能量；Sdd近端自能量；Sff前景残差能量（双路径模式）
+    
+#ifdef TWO_PATH  // 双路径模式条件编译（用于区分前后台滤波器）
+    spx_word32_t Dbf;  // 前后台能量差异相关变量
+    int update_foreground;  // 是否更新前景滤波器的标志
+#endif
+    
+    spx_word32_t Sey;  // 近端与前景误差的互相关能量
+    spx_word16_t ss, ss_1;  // 预加重系数相关：ss为预加重增益；ss_1为1-ss（定点数）或1-ss（浮点数）
+    spx_float_t Pey = FLOAT_ONE, Pyy=FLOAT_ONE;  // 相关系数：Pey近端与远端互相关；Pyy远端自相关
+    spx_float_t alpha, alpha_1;  // 自适应步长及其补数（1-alpha）
+    spx_word16_t RER;  // 残差误差比（Residual to Error Ratio）
+    spx_word32_t tmp32;  // 临时32位字变量，用于中间计算
+
+    N = st->window_size;  // 获取窗口大小（通常为FFT长度）
+    M = st->M;            // 获取滤波器相关参数M（与延迟线长度相关）
+    C = st->C;            // 获取声道数C
+    K = st->K;            // 获取说话人数K
+
+    st->cancel_count++;   // 增加回声消除操作计数（用于自适应控制）
+
+#ifdef FIXED_POINT  // 定点数运算分支
+    ss=DIV32_16(11469,M);  // 计算定点数预加重系数（11469为经验值，对应浮点0.35的定点表示）
+    ss_1 = SUB16(32767,ss);  // 1-ss（定点数最大值32767对应1.0）
+#else  // 浮点数运算分支
+    ss=.35/M;  // 浮点数预加重系数（0.35为经验值，避免预加重过强）
+    ss_1 = 1-ss;  // 1-ss
+#endif
+
+    // 遍历每个声道进行处理
+    for (chan = 0; chan < C; chan++)
+    {
+        /* 应用陷波滤波器抑制直流分量（防止直流导致滤波器性能下降） */
+        filter_dc_notch16(in+chan, st->notch_radius, st->input+chan*st->frame_size, st->frame_size, st->notch_mem+2*chan, C);
+        
+        /* 将输入数据复制到缓冲区并应用预加重 */
+        for (i=0;i<st->frame_size;i++)
+        {
+            spx_word32_t tmp32;  // 临时存储预加重后的信号
+            /* 计算预加重后的输入：当前输入减去前一样本的预加重记忆值 */
+            tmp32 = SUB32(EXTEND32(st->input[chan*st->frame_size+i]), 
+                          EXTEND32(MULT16_16_P15(st->preemph, st->memD[chan])));
+            
+#ifdef FIXED_POINT  // 定点数饱和处理（防止溢出）
+            if (tmp32 > 32767)  // 超过正最大值
+            {
+                tmp32 = 32767;
+                if (st->saturated == 0) st->saturated = 1;  // 标记首次饱和
+            }
+            if (tmp32 < -32767)  // 超过负最大值
+            {
+                tmp32 = -32767;
+                if (st->saturated == 0) st->saturated = 1;  // 标记首次饱和
+            }
+#endif
+            
+            st->memD[chan] = st->input[chan*st->frame_size+i];  // 更新记忆值（保存当前输入）
+            st->input[chan*st->frame_size+i] = EXTRACT16(tmp32);  // 存储预加重后的输入到缓冲区
+        }
+    }
+
+    // 处理每个说话人的远端信号，更新延迟线
+    for (speak = 0; speak < K; speak++)
+    {
+        for (i=0;i<st->frame_size;i++)
+        {
+            spx_word32_t tmp32;  // 临时存储远端信号预加重后的值
+            /* 远端信号移位（更新延迟线，旧数据后移） */
+            st->x[speak*N+i] = st->x[speak*N+i+st->frame_size];
+            /* 计算预加重后的远端信号：当前远端样本减去前一样本的预加重记忆值 */
+            tmp32 = SUB32(EXTEND32(far_end[i*K+speak]), 
+                          EXTEND32(MULT16_16_P15(st->preemph, st->memX[speak])));
+            
+#ifdef FIXED_POINT  // 定点数饱和处理
+            if (tmp32 > 32767)  // 超过正最大值
+            {
+                tmp32 = 32767;
+                st->saturated = M+1;  // 标记饱和（持续M+1帧）
+            }
+            if (tmp32 < -32767)  // 超过负最大值
+            {
+                tmp32 = -32767;
+                st->saturated = M+1;  // 标记饱和（持续M+1帧）
+            }
+#endif
+            
+            st->x[speak*N+i+st->frame_size] = EXTRACT16(tmp32);  // 存储预加重后的远端信号到延迟线
+            st->memX[speak] = far_end[i*K+speak];  // 更新记忆值（保存当前远端样本）
+        }
+    }
+
+    // 将远端信号从时域转换到频域（使用FFT）
+    for (speak = 0; speak < K; speak++)
+    {
+        /* 移位频域缓冲区（为新的FFT结果腾出空间） */
+        for (j=M-1;j>=0;j--)
+        {
+            for (i=0;i<N;i++)
+                st->X[(j+1)*N*K+speak*N+i] = st->X[j*N*K+speak*N+i];
+        }
+        /* 对时域远端信号执行FFT，结果存入频域缓冲区 */
+        spx_fft(st->fft_table, st->x+speak*N, &st->X[speak*N]);
+    }
+
+    Sxx = 0;  // 初始化远端自能量为0
+    // 计算远端信号的自能量（用于后续自适应控制）
+    for (speak = 0; speak < K; speak++)
+    {
+        // 计算当前说话人远端信号的自相关能量（时域）
+        Sxx += mdf_inner_prod(st->x+speak*N+st->frame_size, st->x+speak*N+st->frame_size, st->frame_size);
+        // 累积频域功率谱（用于后续频域处理）
+        power_spectrum_accum(st->X+speak*N, st->Xf, N);
+    }
+
+    Sff = 0;  // 初始化前景残差能量为0（双路径模式）
+    // 双路径模式处理：计算前景滤波器输出及残差能量
+    for (chan = 0; chan < C; chan++)
+    {
+#ifdef TWO_PATH
+        /* 计算前景滤波器输出（频域相乘后逆FFT） */
+        spectral_mul_accum16(st->X, st->foreground+chan*N*K*M, st->Y+chan*N, N, M*K);
+        spx_ifft(st->fft_table, st->Y+chan*N, st->e+chan*N);  // 逆FFT得到时域前景输出
+        
+        /* 计算误差信号：近端输入减去前景输出（延迟补偿） */
+        for (i=0;i<st->frame_size;i++)
+            st->e[chan*N+i] = SUB16(st->input[chan*st->frame_size+i], st->e[chan*N+i+st->frame_size]);
+        
+        Sff += mdf_inner_prod(st->e+chan*N, st->e+chan*N, st->frame_size);  // 累积前景残差能量
+#endif
+    }
+
+    /* 调整比例自适应速率（根据是否饱和） */
+    if (st->adapted)  // 若滤波器已稳定
+        mdf_adjust_prop(st->W, N, M, C*K, st->prop);  // 调整比例参数
+
+    /* 计算权重梯度（仅在未饱和时更新） */
+    if (st->saturated == 0)  // 未发生饱和
+    {
+        // 遍历每个声道和说话人，更新滤波器权重
+        for (chan = 0; chan < C; chan++)
+        {
+            for (speak = 0; speak < K; speak++)
+            {
+                // 遍历每个延迟线抽头（M个抽头）
+                for (j=M-1;j>=0;j--)
+                {
+                    /* 加权频域谱相乘并累加梯度（频域自适应核心操作） */
+                    weighted_spectral_mul_conj(st->power_1, 
+                                             FLOAT_SHL(PSEUDOFLOAT(st->prop[j]),-15), 
+                                             &st->X[(j+1)*N*K+speak*N], 
+                                             st->E+chan*N, 
+                                             st->PHI, 
+                                             N);
+                    // 将梯度累加到滤波器权重（频域）
+                    for (i=0;i<N;i++)
+                        st->W[chan*N*K*M + j*N*K + speak*N + i] += st->PHI[i];
+                }
+            }
+        }
+    } else {  // 发生饱和时，减少饱和计数
+        st->saturated--;
+    }
+
+    /* 更新权重以防止循环卷积效应（AUMDF算法核心） */
+    for (chan = 0; chan < C; chan++)
+    {
+        for (speak = 0; speak < K; speak++)
+        {
+            // 遍历每个延迟线抽头（M个抽头）
+            for (j=0;j<M;j++)
+            {
+                /* 仅当抽头处于特定位置时更新（AUMDF的交替更新策略） */
+                if (j==0 || st->cancel_count%(M-1) == j-1)
+                {
+#ifdef FIXED_POINT  // 定点数实现
+                    // 从频域权重转换为时域（逆FFT）
+                    for (i=0;i<N;i++)
+                        st->wtmp2[i] = EXTRACT16(PSHR32(st->W[chan*N*K*M + j*N*K + speak*N + i], NORMALIZE_SCALEDOWN+16));
+                    spx_ifft(st->fft_table, st->wtmp2, st->wtmp);  // 逆FFT
+                    
+                    // 清零时域前半部分（保留后半部分用于频域处理）
+                    for (i=0;i<st->frame_size;i>) st->wtmp[i]=0;
+                    // 后半部分左移（补偿频域缩放）
+                    for (i=st->frame_size;i<N;i++) st->wtmp[i]=SHL16(st->wtmp[i], NORMALIZE_SCALEUP);
+                    spx_fft(st->fft_table, st->wtmp, st->wtmp2);  // FFT回频域
+                    
+                    // 调整权重（经验性修正项，减少噪声）
+                    for (i=0;i<N;i++)
+                        st->W[chan*N*K*M + j*N*K + speak*N + i] -= SHL32(EXTEND32(st->wtmp2[i]), 16+NORMALIZE_SCALEDOWN-NORMALIZE_SCALEUP-1);
+#else  // 浮点数实现
+                    // 逆FFT得到时域权重
+                    spx_ifft(st->fft_table, &st->W[chan*N*K*M + j*N*K + speak*N], st->wtmp);
+                    // 清零时域前半部分（保留后半部分）
+                    for (i=st->frame_size;i<N;i>) st->wtmp[i]=0;
+                    // FFT回频域（更新权重）
+                    spx_fft(st->fft_table, st->wtmp, &st->W[chan*N*K*M + j*N*K + speak*N]);
+#endif
+                }
+            }
+        }
+    }
+
+    // 初始化频域能量变量（用于后续计算）
+    for (i=0;i<=st->frame_size;i++)
+        st->Rf[i] = st->Yf[i] = st->Xf[i] = 0;
+
+    Dbf = 0;  // 初始化前后台能量差异变量
+    See = 0;  // 初始化远端自能量（双路径模式）
+
+#ifdef TWO_PATH  // 双路径模式处理
+    /* 计算前景滤波器输出及残差能量，用于评估滤波器性能 */
+    for (chan = 0; chan < C; chan++)
+    {
+        /* 计算前景滤波器输出（频域相乘后逆FFT） */
+        spectral_mul_accum(st->X, st->W+chan*N*K*M, st->Y+chan*N, N, M*K);
+        spx_ifft(st->fft_table, st->Y+chan*N, st->y+chan*N);  // 逆FFT得到时域输出
+        
+        /* 计算误差信号：前一帧前景输出减去当前前景输出（延迟补偿） */
+        for (i=0;i<st->frame_size;i++)
+            st->e[chan*N+i] = SUB16(st->e[chan*N+i+st->frame_size], st->y[chan*N+i+st->frame_size]);
+        
+        Dbf += 10 + mdf_inner_prod(st->e+chan*N, st->e+chan*N, st->frame_size);  // 累积能量差异（含经验偏移10）
+        
+        /* 计算另一种误差信号：近端输入减去前景输出（延迟补偿） */
+        for (i=0;i<st->frame_size;i++)
+            st->e[chan*N+i] = SUB16(st->input[chan*st->frame_size+i], st->y[chan*N+i+st->frame_size]);
+        
+        See += mdf_inner_prod(st->e+chan*N, st->e+chan*N, st->frame_size);  // 累积当前误差能量
+    }
+#endif
+
+#ifndef TWO_PATH  // 非双路径模式，误差能量等于前景残差能量
+    Sff = See;
+#endif
+
+#ifdef TWO_PATH  // 双路径模式的核心逻辑：决定是否切换前景/后台滤波器
+    /* 计算前后台能量差异的统计量（均值和方差） */
+    st->Davg1 = ADD32(MULT16_32_Q15(QCONST16(.6f,15),st->Davg1),  // 指数平滑更新均值1（系数0.6）
+                     MULT16_32_Q15(QCONST16(.4f,15),SUB32(Sff,See)));  // 加权当前差异(Sff-See)
+    st->Davg2 = ADD32(MULT16_32_Q15(QCONST16(.85f,15),st->Davg2),  // 指数平滑更新均值2（系数0.85）
+                     MULT16_32_Q15(QCONST16(.15f,15),SUB32(Sff,See)));  // 加权当前差异(Sff-See)
+    
+    // 更新方差（经验性公式，结合能量和差异）
+    st->Dvar1 = FLOAT_ADD(FLOAT_MULT(VAR1_SMOOTH, st->Dvar1),  // 指数平滑更新方差1（系数VAR1_SMOOTH）
+                         FLOAT_MUL32U(MULT16_32_Q15(QCONST16(.4f,15),Sff),  // 加权Sff
+                                      MULT16_32_Q15(QCONST16(.4f,15),Dbf)));  // 加权Dbf
+    st->Dvar2 = FLOAT_ADD(FLOAT_MULT(VAR2_SMOOTH, st->Dvar2),  // 指数平滑更新方差2（系数VAR2_SMOOTH）
+                         FLOAT_MUL32U(MULT16_32_Q15(QCONST16(.15f,15),Sff),  // 加权Sff
+                                      MULT16_32_Q15(QCONST16(.15f,15),Dbf)));  // 加权Dbf
+
+    update_foreground = 0;  // 初始化更新标志为0（不更新）
+    
+    /* 统计检验：判断前景滤波器是否显著优于后台（残差能量是否显著降低） */
+    // 条件1：当前差异的平方大于Sff*Dbf的经验阈值
+    if (FLOAT_GT(FLOAT_MUL32U(SUB32(Sff,See), ABS32(SUB32(Sff,See))), 
+                 FLOAT_MUL32U(Sff,Dbf)))
+        update_foreground = 1;
+    // 条件2：均值1的平方超过方差1的经验阈值（VAR1_UPDATE）
+    else if (FLOAT_GT(FLOAT_MUL32U(st->Davg1, ABS32(st->Davg1)), 
+                      FLOAT_MULT(VAR1_UPDATE, st->Dvar1)))
+        update_foreground = 1;
+    // 条件3：均值2的平方超过方差2的经验阈值（VAR2_UPDATE）
+    else if (FLOAT_GT(FLOAT_MUL32U(st->Davg2, ABS32(st->Davg2)), 
+                      FLOAT_MULT(VAR2_UPDATE, st->Dvar2)))
+        update_foreground = 1;
+
+    if (update_foreground)  // 满足更新条件
+    {
+        st->Davg1 = st->Davg2 = 0;  // 重置均值
+        st->Dvar1 = st->Dvar2 = FLOAT_ZERO;  // 重置方差
+        
+        /* 将后台滤波器权重复制到前景（切换为新的前景滤波器） */
+        for (i=0;i<N*M*C*K;i++)
+            st->foreground[i] = EXTRACT16(PSHR32(st->W[i],16));  // 取权重的16位有效部分
+        
+        /* 应用平滑过渡（避免切换时的阻塞伪影） */
+        for (chan = 0; chan < C; chan++)
+            for (i=0;i<st->frame_size;i++)
+                // 当前输出 = 窗函数加权的前景输出 + 窗函数加权的后台输出
+                st->e[chan*N+i+st->frame_size] = MULT16_16_Q15(st->window[i+st->frame_size], st->e[chan*N+i+st->frame_size]) 
+                                                + MULT16_16_Q15(st->window[i], st->y[chan*N+i+st->frame_size]);
+    } else {  // 不满足更新条件，检查是否需要重置后台滤波器
+        int reset_background=0;  // 重置标志初始化为0
+        
+        /* 统计检验：判断后台滤波器是否显著劣于前景 */
+        // 条件1：差异的负平方超过Sff*Dbf的经验阈值（VAR_BACKTRACK）
+        if (FLOAT_GT(FLOAT_MUL32U(NEG32(SUB32(Sff,See)), ABS32(SUB32(Sff,See))), 
+                     FLOAT_MULT(VAR_BACKTRACK, FLOAT_MUL32U(Sff,Dbf))))
+            reset_background = 1;
+        // 条件2：均值1的平方超过方差1的经验阈值（VAR_BACKTRACK）
+        else if (FLOAT_GT(FLOAT_MUL32U(NEG32(st->Davg1), ABS32(st->Davg1)), 
+                          FLOAT_MULT(VAR_BACKTRACK, st->Dvar1)))
+            reset_background = 1;
+        // 条件3：均值2的平方超过方差2的经验阈值（VAR_BACKTRACK）
+        else if (FLOAT_GT(FLOAT_MUL32U(NEG32(st->Davg2), ABS32(st->Davg2)), 
+                          FLOAT_MULT(VAR_BACKTRACK, st->Dvar2)))
+            reset_background = 1;
+
+        if (reset_background)  // 满足重置条件
+        {
+            /* 将前景滤波器权重复制到后台（恢复旧的背景滤波器） */
+            for (i=0;i<N*M*C*K;i++)
+                st->W[i] = SHL32(EXTEND32(st->foreground[i]),16);  // 权重左移16位（恢复16位小数部分）
+            
+            /* 同步输出信号以保证后续适应正确 */
+            for (chan = 0; chan < C; chan++)
+            {
+                for (i=0;i<st->frame_size;i++)
+                    st->y[chan*N+i+st->frame_size] = st->e[chan*N+i+st->frame_size];  // 同步前景输出到后台
+                for (i=0;i<st->frame_size;i++)
+                    st->e[chan*N+i] = SUB16(st->input[chan*st->frame_size+i], st->y[chan*N+i+st->frame_size]);  // 重新计算误差
+            }
+            See = Sff;  // 重置误差能量为当前前景能量
+            st->Davg1 = st->Davg2 = 0;  // 重置均值
+            st->Dvar1 = st->Dvar2 = FLOAT_ZERO;  // 重置方差
+        }
+    }
+#endif
+
+    Sey = Syy = Sdd = 0;  // 初始化互相关和能量变量
+
+    // 遍历每个声道计算误差信号及相关统计量
+    for (chan = 0; chan < C; chan++)
+    {
+        /* 计算输出信号（去加重并补偿饱和） */
+        for (i=0;i<st->frame_size;i++)
+        {
+            spx_word32_t tmp_out;  // 临时存储输出信号
+            
+#ifdef TWO_PATH  // 双路径模式使用前景误差
+            tmp_out = SUB32(EXTEND32(st->input[chan*st->frame_size+i]), 
+                          EXTEND32(st->e[chan*N+i+st->frame_size]));
+#else  // 单路径模式使用后台滤波器输出
+            tmp_out = SUB32(EXTEND32(st->input[chan*st->frame_size+i]), 
+                          EXTEND32(st->y[chan*N+i+st->frame_size]));
+#endif
+            
+            // 预加重补偿（恢复原始信号的电平）
+            tmp_out = ADD32(tmp_out, EXTEND32(MULT16_16_P15(st->preemph, st->memE[chan])));
+            
+            /* 饱和检测（标记输入是否饱和） */
+            if (in[i*C+chan] <= -32000 || in[i*C+chan] >= 32000)
+                if (st->saturated == 0) st->saturated = 1;
+            
+            out[i*C+chan] = WORD2INT(tmp_out);  // 输出信号转换为16位整数
+            st->memE[chan] = tmp_out;  // 更新误差记忆值
+        }
+
+#ifdef DUMP_ECHO_CANCEL_DATA  // 调试数据转储（可选）
+        dump_audio(in, far_end, out, st->frame_size);
+#endif
+
+        /* 计算误差信号的历史值（用于后续相关计算） */
+        for (i=0;i<st->frame_size;i++)
+        {
+            st->e[chan*N+i+st->frame_size] = st->e[chan*N+i];  // 旧误差后移
+            st->e[chan*N+i] = 0;  // 清零当前误差（准备存储新值）
+        }
+
+        /* 计算关键互相关和能量 */
+        Sey += mdf_inner_prod(st->e+chan*N+st->frame_size, st->y+chan*N+st->frame_size, st->frame_size);  // 近端与前景误差的互相关
+        Syy += mdf_inner_prod(st->y+chan*N+st->frame_size, st->y+chan*N+st->frame_size, st->frame_size);  // 前景输出自能量
+        Sdd += mdf_inner_prod(st->input+chan*st->frame_size, st->input+chan*st->frame_size, st->frame_size);  // 近端输入自能量
+
+        /* 将误差信号转换到频域（FFT） */
+        spx_fft(st->fft_table, st->e+chan*N, st->E+chan*N);
+        
+        // 清零时域前景输出缓冲区（准备存储新的FFT结果）
+        for (i=0;i<st->frame_size;i++) st->y[i+chan*N] = 0;
+        /* 将时域前景输出转换到频域（FFT） */
+        spx_fft(st->fft_table, st->y+chan*N, st->Y+chan*N);
+
+        /* 累积频域能量（用于后续自适应计算） */
+        power_spectrum_accum(st->E+chan*N, st->Rf, N);  // 误差信号的功率谱
+        power_spectrum_accum(st->Y+chan*N, st->Yf, N);  // 前景输出的功率谱
+    }
+
+    /* 合理性检查：防止异常状态导致崩溃 */
+    if (!(Syy>=0 && Sxx>=0 && See >= 0)  // 能量值非负检查（定点数）
+#ifndef FIXED_POINT  // 浮点数额外检查能量范围
+         || !(Sff < N*1e9 && Syy < N*1e9 && Sxx < N*1e9)
+#endif
+        )
+    {
+        st->screwed_up += 50;  // 异常计数增加
+        // 输出静音（防止异常信号）
+        for (i=0;i<st->frame_size*C;i++) out[i] = 0;
+    } else if (SHR32(Sff, 2) > ADD32(Sdd, SHR32(MULT16_16(N, 10000),6)))  // 远端能量异常增大（可能回声未消除）
+    {
+        st->screwed_up++;  // 异常计数增加
+    } else {
+        st->screwed_up=0;  // 无异常，计数清零
+    }
+
+    /* 若异常计数超过阈值，重置回声消除器 */
+    if (st->screwed_up>=50)
+    {
+        speex_warning("The echo canceller started acting funny and got slapped (reset). It swears it will behave now.");  // 警告信息
+        speex_echo_state_reset(st);  // 重置状态结构体
+        return;  // 提前返回
+    }
+
+    /* 添加噪声地板（防止除零错误，增强数值稳定性） */
+    See = MAX32(See, SHR32(MULT16_16(N, 100),6));  // See至少为N*100/64（经验值）
+
+    // 重新计算远端自能量（可能之前未计算）
+    for (speak = 0; speak < K; speak++)
+    {
+        Sxx += mdf_inner_prod(st->x+speak*N+st->frame_size, st->x+speak*N+st->frame_size, st->frame_size);  // 远端自能量
+        power_spectrum_accum(st->X+speak*N, st->Xf, N);  // 累积远端功率谱
+    }
+
+    /* 平滑远端能量估计（指数加权移动平均） */
+    for (j=0;j<=st->frame_size;j++)
+        st->power[j] = MULT16_32_Q15(ss_1,st->power[j])  // 历史能量加权（ss_1=1-ss）
+                    + 1  // 经验偏移（防止零能量）
+                    + MULT16_32_Q15(ss,st->Xf[j]);  // 当前帧能量加权（ss=ss）
+
+    /* 计算频域相关系数（用于自适应步长调整） */
+    for (j=st->frame_size;j>=0;j--)
+    {
+        spx_float_t Eh, Yh;  // 频域相关系数临时变量
+        Eh = PSEUDOFLOAT(st->Rf[j] - st->Eh[j]);  // 误差互相关变化量（伪浮点转换）
+        Yh = PSEUDOFLOAT(st->Yf[j] - st->Yh[j]);  // 远端自相关变化量（伪浮点转换）
+        Pey = FLOAT_ADD(Pey, FLOAT_MULT(Eh,Yh));  // 累积近端-远端互相关
+        Pyy = FLOAT_ADD(Pyy, FLOAT_MULT(Yh,Yh));  // 累积远端自相关
+
+#ifdef FIXED_POINT  // 定点数平滑（经验系数）
+        st->Eh[j] = MAC16_32_Q15(MULT16_32_Q15(SUB16(32767,st->spec_average),st->Eh[j]),  // 历史值加权（spec_average为平滑系数）
+                                st->spec_average, st->Rf[j]);  // 当前值加权
+        st->Yh[j] = MAC16_32_Q15(MULT16_32_Q15(SUB16(32767,st->spec_average),st->Yh[j]),  // 历史值加权
+                                st->spec_average, st->Yf[j]);  // 当前值加权
+#else  // 浮点数平滑
+        st->Eh[j] = (1-st->spec_average)*st->Eh[j] + st->spec_average*st->Rf[j];  // 指数平滑
+        st->Yh[j] = (1-st->spec_average)*st->Yh[j] + st->spec_average*st->Yf[j];  // 指数平滑
+#endif
+    }
+
+    Pyy = FLOAT_SQRT(Pyy);  // 计算远端自相关平方根（范数）
+    Pey = FLOAT_DIVU(Pey,Pyy);  // 计算近端-远端互相关与远端自相关的比值
+
+    /* 计算自适应步长alpha（基于泄漏估计） */
+    tmp32 = MULT16_32_Q15(st->beta0,Syy);  // 初始步长上限（beta0为经验系数）
+    if (tmp32 > MULT16_32_Q15(st->beta_max,See))  // 不超过最大允许步长（beta_max为经验系数）
+        tmp32 = MULT16_32_Q15(st->beta_max,See);
+    alpha = FLOAT_DIV32(tmp32, See);  // 实际步长（与误差能量成反比）
+    alpha_1 = FLOAT_SUB(FLOAT_ONE, alpha);  // 步长的补数（1-alpha）
+
+    /* 更新相关系数的递归平均 */
+    st->Pey = FLOAT_ADD(FLOAT_MULT(alpha_1,st->Pey), FLOAT_MULT(alpha,Pey));  // Pey平滑更新
+    st->Pyy = FLOAT_ADD(FLOAT_MULT(alpha_1,st->Pyy), FLOAT_MULT(alpha,Pyy));  // Pyy平滑更新
+    if (FLOAT_LT(st->Pyy, FLOAT_ONE)) st->Pyy = FLOAT_ONE;  // 防止Pyy过小（至少为1）
+
+    // 泄漏估计限制（不超过33dB衰减，MIN_LEAK为经验值）
+    if (FLOAT_LT(st->Pey, FLOAT_MULT(MIN_LEAK,st->Pyy)))
+        st->Pey = FLOAT_MULT(MIN_LEAK,st->Pyy);
+    if (FLOAT_GT(st->Pey, st->Pyy))  // Pey不能超过Pyy（物理意义约束）
+        st->Pey = st->Pyy;
+
+    /* 计算泄漏估计的16位表示（用于后续自适应） */
+    st->leak_estimate = FLOAT_EXTRACT16(FLOAT_SHL(FLOAT_DIVU(st->Pey, st->Pyy),14));  // 左移14位（Q14格式）
+    if (st->leak_estimate > 16383)  // 限制最大值（Q14最大为16383）
+        st->leak_estimate = 32767;  // 转换为Q15格式（左移1位）
+    else
+        st->leak_estimate = SHL16(st->leak_estimate,1);  // 转换为Q15格式
+
+    /* 更新最后输出的远端信号（用于未适应阶段的 fallback） */
+    for (i=0;i<st->frame_size;i++)
+        st->last_y[i] = st->last_y[st->frame_size+i];  // 循环移位缓冲区
+
+    if (st->adapted)  // 滤波器已稳定（适应阶段完成）
+    {
+        /* 使用滤波后的回声信号更新last_y */
+        for (i=0;i<st->frame_size;i++)
+            st->last_y[st->frame_size+i] = in[i]-out[i];  // 近端输入减去输出（即估计的回声）
+    } else {  // 滤波器未稳定（适应阶段）
+        /* 未适应时，直接使用远端信号作为last_y（fallback策略） */
+        // （注：原注释中的循环被注释掉，实际可能不需要）
+    }
+
+    /* 计算自适应速率（根据是否适应完成） */
+    if (st->adapted)  // 已适应阶段
+    {
+        // 遍历每个频率点计算自适应掩码
+        for (i=0;i<=st->frame_size;i++)
+        {
+            spx_word32_t r, e;  // 临时变量：r为经验权重；e为远端功率谱
+            /* 计算经验权重r（与远端功率谱和泄漏估计相关） */
+            r = MULT16_32_Q15(st->leak_estimate, SHL32(st->Yf[i],3));  // 左移3位（Q3格式转Q0）
+            e = SHL32(st->Rf[i],3) + 1;  // 近端功率谱左移3位（Q3格式转Q0）加1（防零）
+            
+#ifdef FIXED_POINT  // 定点数限制r不超过e/2
+            if (r > SHR32(e,1)) r = SHR32(e,1);
+#else  // 浮点数限制r不超过0.5*e
+            if (r > .5*e) r = .5*e;
+#endif
+            
+            /* 计算最终权重调整因子（结合RER和经验系数） */
+            r = MULT16_32_Q15(QCONST16(.7,15),r) + MULT16_32_Q15(QCONST16(.3,15), MULT16_32_Q15(RER,e)));
+            /* 更新自适应速率参数power_1（频域） */
+            st->power_1[i] = FLOAT_SHL(FLOAT_DIV32_FLOAT(r, FLOAT_MUL32U(e,st->power[i]+10)), WEIGHT_SHIFT+16);
+        }
+    } else {  // 未适应阶段（初始适应）
+        spx_word16_t adapt_rate=0;  // 自适应速率初始化为0
+        
+        if (Sxx > SHR32(MULT16_16(N, 1000),6))  // 近端能量足够大时开始适应
+        {
+            tmp32 = MULT16_32_Q15(QCONST16(.25f, 15), Sxx);  // 初始速率上限（0.25*Sxx）
+#ifdef FIXED_POINT  // 定点数限制速率不超过See/4
+            if (tmp32 > SHR32(See,2)) tmp32 = SHR32(See,2);
+#else  // 浮点数限制速率不超过0.25*See
+            if (tmp32 > .25*See) tmp32 = .25*See;
+#endif
+            adapt_rate = FLOAT_EXTRACT16(FLOAT_SHL(FLOAT_DIV32(tmp32, See),15));  // 转换为Q15格式
+        }
+        
+        // 遍历每个频率点设置自适应速率
+        for (i=0;i<=st->frame_size;i++)
+            st->power_1[i] = FLOAT_SHL(FLOAT_DIV32(EXTEND32(adapt_rate), ADD32(st->power[i],10)), WEIGHT_SHIFT+1);
+        
+        st->sum_adapt = ADD32(st->sum_adapt, adapt_rate);  // 累积适应进度
+    }
+}
+

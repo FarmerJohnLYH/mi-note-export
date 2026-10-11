@@ -1,0 +1,191 @@
+<title>半年恋爱报告</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;900&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* 布局：单栏长文档，章节间以月度时间线串联；浅色纸张感 + 深墨文字 */
+:root {
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --ink: #2b2622;
+  --ink-soft: #6b6259;
+  --line: #e4ddd3;
+  --accent: #8c3b2e;      /* 朱砂 */
+  --accent-soft: #f3e6e2;
+  --good: #3d6b4f;
+  --good-soft: #e6efe9;
+  --bad: #a33b3b;
+  --bad-soft: #f6e7e7;
+  --quote: #f5f1ea;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1917; --surface: #262220; --ink: #e8e2da; --ink-soft: #a89e92;
+    --line: #3d3733; --accent: #d97b68; --accent-soft: #3a2a26;
+    --good: #7fb894; --good-soft: #243329; --bad: #e08080; --bad-soft: #3b2828;
+    --quote: #2e2a26; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1917; --surface: #262220; --ink: #e8e2da; --ink-soft: #a89e92;
+  --line: #3d3733; --accent: #d97b68; --accent-soft: #3a2a26;
+  --good: #7fb894; --good-soft: #243329; --bad: #e08080; --bad-soft: #3b2828;
+  --quote: #2e2a26; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.85;
+}
+.wrap { max-width: 46rem; margin: 0 auto; padding-inline: 20px; padding-block: 48px; }
+h1, h2, h3 { font-family: "Noto Serif SC", "Songti SC", serif; text-wrap: balance; }
+.eyebrow { font-size: 12px; letter-spacing: .35em; color: var(--accent); font-weight: 700; }
+h1 { font-size: 2.1rem; font-weight: 900; margin: .3em 0 .2em; }
+.sub { color: var(--ink-soft); font-size: .95rem; margin-bottom: 2.5em; }
+h2 { font-size: 1.4rem; font-weight: 600; margin: 2.6em 0 .8em; padding-top: 1.6em; border-top: 1px solid var(--line); }
+h2 .no { color: var(--accent); font-size: .85em; margin-right: .5em; }
+h3 { font-size: 1.05rem; margin: 1.8em 0 .5em; }
+p { margin: .7em 0; }
+.note { font-size: .85rem; color: var(--ink-soft); border-left: 3px solid var(--line); padding-left: 12px; }
+blockquote {
+  margin: 1.1em 0; padding: 14px 18px; background: var(--quote);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0;
+  font-family: "Noto Serif SC", serif; color: var(--ink);
+}
+blockquote .date { display: block; font-family: "Noto Sans SC", sans-serif; font-size: .75rem; color: var(--ink-soft); margin-top: 8px; letter-spacing: .1em; }
+/* 时间线 */
+.timeline { margin: 1.5em 0; }
+.phase { display: flex; gap: 16px; padding: 14px 0; border-bottom: 1px dashed var(--line); }
+.phase:last-child { border-bottom: none; }
+.phase .when { flex: 0 0 5.5em; font-size: .8rem; color: var(--ink-soft); padding-top: 3px; font-variant-numeric: tabular-nums; }
+.phase .what { min-width: 0; }
+.phase .name { font-weight: 700; }
+.phase .desc { font-size: .9rem; color: var(--ink-soft); }
+.meter { height: 5px; border-radius: 3px; background: var(--line); margin-top: 8px; overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 3px; }
+.meter.hi i { background: var(--good); }
+.meter.mid i { background: #c8a24a; }
+.meter.lo i { background: var(--bad); }
+/* 问答卡 */
+.qa { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; margin: 1.2em 0; }
+.qa .q { font-family: "Noto Serif SC", serif; font-weight: 600; font-size: 1.1rem; margin-bottom: 6px; }
+.qa .verdict { display: inline-block; font-size: .8rem; font-weight: 700; padding: 2px 10px; border-radius: 99px; margin-bottom: 10px; }
+.verdict.no { background: var(--bad-soft); color: var(--bad); }
+.verdict.mixed { background: var(--accent-soft); color: var(--accent); }
+.qa p { font-size: .93rem; }
+/* 双栏对照 */
+.vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 1.2em 0; }
+@media (max-width: 560px) { .vs { grid-template-columns: 1fr; } }
+.vs > div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; font-size: .9rem; min-width: 0; }
+.vs h4 { margin: 0 0 8px; font-size: .95rem; }
+.vs ul { margin: 0; padding-left: 1.2em; color: var(--ink-soft); }
+.vs li { margin: .35em 0; }
+.red { background: var(--bad-soft); border: 1px solid var(--bad); border-radius: 10px; padding: 18px 20px; margin: 1.2em 0; }
+.red h3 { margin-top: 0; color: var(--bad); }
+.footer { margin-top: 3em; padding-top: 1.5em; border-top: 1px solid var(--line); font-size: .82rem; color: var(--ink-soft); }
+</style>
+
+<div class="wrap">
+
+<p class="eyebrow">DIARY REVIEW · 2026.04 — 2026.10</p>
+<h1>半年恋爱关系报告</h1>
+<p class="sub">基于 2026 年 4 月至 10 月共 140 篇日记（《2026日记合集》），逐篇提取恋爱相关内容后撰写。所有判断均可回溯到具体日期的原文。</p>
+
+<p class="note">阅读前须知：日记只记录了你的视角，她的声音全部经过你的转述。这份报告分析的是"你笔下的这段关系"，并尽量修正单视角带来的偏差。</p>
+
+<h2><span class="no">壹</span>关系轨迹</h2>
+<p>半年走完了"暧昧 → 热恋 → 消耗 → 终结"的完整周期。你在 4 月 24 日就写下过预言："我仿佛预见到，我们仍会以某种方式分开。"</p>
+
+<div class="timeline">
+  <div class="phase"><div class="when">4月上中旬</div><div class="what"><div class="name">暧昧升温</div><div class="desc">深夜长电话、4/5 第一次牵手、"无法诉说的幸福"。一个月通话 67+ 小时。</div><div class="meter hi"><i style="width:85%"></i></div></div></div>
+  <div class="phase"><div class="when">4月下旬</div><div class="what"><div class="name">第一次危机</div><div class="desc">她翻你日记和聊天记录，冲突爆发，你写下她的"三大人格问题"，4/28 和解。</div><div class="meter mid"><i style="width:45%"></i></div></div></div>
+  <div class="phase"><div class="when">5月</div><div class="what"><div class="name">确认长择</div><div class="desc">5/19 初吻、5/22 长择谈判、5/28 你决心表白——"此生最接近神雕侠侣的爱情"。</div><div class="meter hi"><i style="width:75%"></i></div></div></div>
+  <div class="phase"><div class="when">6月上中旬</div><div class="what"><div class="name">热恋与隐患</div><div class="desc">表白、车祸她横穿城市赶来医院；性开始，伴随勃起障碍与药物依赖。</div><div class="meter hi"><i style="width:65%"></i></div></div></div>
+  <div class="phase"><div class="when">6下旬–7月中</div><div class="what"><div class="name">矛盾密集期</div><div class="desc">避孕套脱落+紧急避孕药、通宵电话惩罚（最长9小时）、7/17 她全面断联。</div><div class="meter lo"><i style="width:25%"></i></div></div></div>
+  <div class="phase"><div class="when">7月底–8月</div><div class="what"><div class="name">复合与消耗</div><div class="desc">"去父留子"冲击、白云机场大吵、两个月花费 10 万。</div><div class="meter lo"><i style="width:30%"></i></div></div></div>
+  <div class="phase"><div class="when">9月</div><div class="what"><div class="name">慢性死亡</div><div class="desc">冷战常态化、9/13 她的"对不起的秘密"、9/20 你首次明确写下分手念头。</div><div class="meter lo"><i style="width:15%"></i></div></div></div>
+  <div class="phase"><div class="when">10月</div><div class="what"><div class="name">终点</div><div class="desc">日本旅行成为"最后的旅行"，10/7–10/8 写下分手决心。</div><div class="meter lo"><i style="width:8%"></i></div></div></div>
+</div>
+
+<h2><span class="no">贰</span>多角度拆解</h2>
+
+<h3>1 · 互动模式：她追，你逃，然后她把你困住</h3>
+<p>几乎所有亲密升级都由她主动：牵手、改备注"hh"、性话题、戒指约定、甚至"那我们什么时候做？"。你被动承接，但始终保留底线：拒给支付密码、不删聊天记录、迟迟不表白。</p>
+<p>中后期固化成同一个循环：<strong>吵架 → 冷战 → 性/酒精和解 → 复发</strong>。你在 9/15 自己总结过："性生活和谐的周末，往往在情绪上也会和谐得多。"性成了创可贴，而不是连接。半年里核心矛盾从未被解决过一次，只是被反复推迟。</p>
+
+<h3>2 · 依恋结构：焦虑型 × 回避型的互耗</h3>
+<div class="vs">
+  <div>
+    <h4>她（焦虑型）</h4>
+    <ul>
+      <li>反复测试：逼问、深夜电话不放人、"哄我！"</li>
+      <li>翻日记、查手机、要求"无边界"</li>
+      <li>"紧紧抓住你，直到抓不住为止"</li>
+      <li>自述恋爱循环：逼走对方 → 短择 → 反而被爱</li>
+    </ul>
+  </div>
+  <div>
+    <h4>你（回避型）</h4>
+    <ul>
+      <li>压力大躲进洞穴，只"解决自己的情绪"</li>
+      <li>写"墓志铭"把活人变成分析对象</li>
+      <li>8/12："我都快忘了她在和我恋爱了"（第三视角）</li>
+      <li>对前任思思用过同款退出：冷暴力、故意迟回消息</li>
+    </ul>
+  </div>
+</div>
+<p>这个组合的本质：她越不安越抓，你越被抓越逃，你逃她更不安。半年来这个循环没有打破过。</p>
+
+<h3>3 · 金钱：你心里的第一根刺</h3>
+<p>两个月 10 万（5 万房租、1 万相机、3 万当月消费）；她不工作；你 6/16 列过"捞女三时刻"，她崩溃痛哭；8/27 你共情孙宇晨——金钱怨气已触及你对关系性质的根本怀疑。</p>
+<p>但要公平地记下：<strong>5/17 她把 2 万退回，备注"自愿赠予"</strong>。她的金钱叙事和你心里的版本并不完全一致，这根刺有一部分是你的想象喂大的。</p>
+
+<h3>4 · 性：从压力源到控制工具</h3>
+<p>你的轨迹：戴套即软 → 西地那非依赖 → "她觉得我太细了"的羞耻 → 10/6"单身的性体验比cp更好"。她的轨迹：自述"95%的时间在演" → 8/3 人生第一次高潮 → 主动学习配合。10/2 你识别出她用性做控制（刮胡子、刷牙、漱口水都做好了才做）——性本来是少数真实的连接点，后期也被卷进了权力斗争。</p>
+
+<div class="red">
+  <h3>5 · 生育议题：最严重的红旗</h3>
+  <p>8/1–8/3：她谎称安全期、哀求内射、事后提出"去父留子"（不做亲子鉴定、不上出生证、不要抚养费）。无论她多真诚，这是<strong>生育欺骗</strong>的教科书形态。"我有钱养""不用你负责"在法律上不成立——你自己也写过"最坏的情况是收入的 20%–50% 充作抚养费"。这不是磨合问题，是信任地基的问题。</p>
+</div>
+
+<h3>6 · 你的代价：睡眠、情绪和自我</h3>
+<p>睡眠被系统性剥夺（9 小时通宵电话"惩罚"、凌晨吵架到 5 点、她"美国作息"你 9 点上班）；情绪上你成了她 24 小时待命的心理医生。7/13 你写过"想死的冲动，站在楼上往楼下看"——哪怕是一闪念，一段关系把你带到这句话附近，本身就已是答案的一部分。</p>
+<p>同时你也承认代价不全是她造成的："在感情下降期经营感情的方面，我一般是什么也不做的。"</p>
+
+<h3>7 · 公平起见：她爱你的证据同样真实</h3>
+<p>车祸后打车半小时横穿城市赶来；生日三天全心准备；"这次我会紧紧抓住你"；退回 2 万；8/12 连说三个对不起"委屈得让人心疼"；9/30 你自己写的"她人很聪明，对待我也认真"。</p>
+<p>她不是反派。她是一个不安、控制欲强、从未工作过、用金钱和性表达爱的姑娘；而你需要的是"平静而坚定的独立人格"（9/21）。这不是好坏问题，是匹配问题——4/25 你自己写过：<strong>"爱情和磨合根本不是互相改变的过程，它明明是一个互相匹配的过程。"</strong></p>
+
+<h2><span class="no">叁</span>三个问题</h2>
+
+<div class="qa">
+  <p class="q">要不要分手？</p>
+  <span class="verdict no">要</span>
+  <p>这不是这份报告替你下的结论，是你自己已经在日记里下完的结论：</p>
+</div>
+<blockquote>一想到从日本回来就能愉快分手，心里顿时有莫大的解脱感。<span class="date">2026-09-20</span></blockquote>
+<blockquote>我无法背叛自己的内心，想到要分手就开心，想到还要在一起就倍感压力。<span class="date">2026-10-08</span></blockquote>
+<p>支撑它的客观事实：作息相反且互不退让；金钱冲突且金额巨大；生育议题上的欺骗行为；半年三次走到分手边缘又靠性和酒精复合；她即将赴日三年，异国只会放大现有矛盾。拖延的每一天都在增加成本。</p>
+<p><strong>两个执行提醒</strong>：① 用文字一次说清楚——你自己认可过文字分手是"最佳实践，冰冷得无法被误解"；不要重演对思思的冷暴力式慢慢变坏，那是日记里你唯一对自己流露羞耻的地方。② 分手前确认她没有怀孕，切割金钱往来（房租、车、支付宝授权）——8 月的事意味着这是现实风险。</p>
+
+<div class="qa">
+  <p class="q">我幸福吗？</p>
+  <span class="verdict no">不幸福</span>
+</div>
+<blockquote>我幸福吗？我知道我能问出来，就说明工作日我并不幸福。<span class="date">2026-09-16</span></blockquote>
+<blockquote>哪怕说她能够偶然带来超标的幸福，但是她却又带来了超标的不幸福。<span class="date">2026-10-08</span></blockquote>
+<p>幸福感集中在 4 月上旬（牵手、高速、生日）和少数性爱时刻；6 月以后"耗尽、窒息、痛苦、想逃"成为主旋律。峰值很高，均值很低——而你为峰值付出的，是睡眠、金钱、情绪稳定和一部分自我。</p>
+
+<div class="qa">
+  <p class="q">对方幸福吗？</p>
+  <span class="verdict mixed">也不幸福</span>
+</div>
+<p>她的不幸福表现成抓得更紧：反复测试、查手机、通宵电话、吵架时满屏撤回、9/13 那个说不出口的"秘密"——全都指向深度不安全感，而不是满足。她自己说过："如果每一任都这么说，那只能是我的问题了吧。"同样的循环她在前两任那里重复过，在你这里又重复了一遍。你的离开对她短期是剧痛，长期未必是损失；继续拖下去，才是真的消耗她。</p>
+
+<h2><span class="no">尾</span>一句你自己的话</h2>
+<blockquote>山上的花不是人看见了才会开，有的恋爱就只有在恰当的时机才能开花结果。<span class="date">2026-04-24</span></blockquote>
+<p>时机错了，两个好人也会互相耗尽。你们已经彼此耗尽过了——这句也是你写的（4/29）。</p>
+
+<div class="footer">
+  数据源：mi-notes / 2026日记合集（237 篇，2026-01-04 → 2026-10-08）· 本报告覆盖 4–10 月恋爱相关条目 · 生成于 2026-10-08
+</div>
+
+</div>

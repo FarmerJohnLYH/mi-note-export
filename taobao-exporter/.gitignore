@@ -1,0 +1,51 @@
+# =====================================================================
+# RELEASE SAFETY: never commit personal Taobao data or session files.
+# =====================================================================
+
+# Browser profile holds your logged-in session / cookies — NEVER commit it.
+# The trailing-glob form also covers timestamped backups (browser_profile_old_*).
+browser_profile/
+browser_profile*/
+
+# Debug snapshots may contain real order HTML/text — keep local only.
+debug_snapshots/
+
+# Exported order data and any spreadsheets — keep private.
+*.csv
+*.xlsx
+*.xls
+
+# Page snapshots / dumps — may contain sensitive order info.
+*.html
+*.txt
+
+# Logs
+*.log
+
+# Secrets / environment
+.env
+*.pem
+*.key
+cookies.json
+*.session
+*.sqlite
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.python-version
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---------------------------------------------------------------------
+# Allow-list: files that MUST be tracked even though the rules above
+# would otherwise ignore them. (Negations must come AFTER the ignores.)
+# ---------------------------------------------------------------------
+!requirements.txt
+!examples/sample_orders.csv

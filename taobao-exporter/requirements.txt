@@ -1,0 +1,5 @@
+# Local Taobao order exporter — dependencies
+# Python 3.11+ recommended.
+
+playwright>=1.40
+openpyxl>=3.1   # only needed for --format xlsx
