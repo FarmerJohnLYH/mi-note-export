@@ -4,6 +4,8 @@ import re, json, hashlib, unicodedata
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = Path(__file__).resolve().parent
+if (OUT / '阅读进度.json').exists():
+    raise SystemExit('Reading index already exists; preserve reviewed progress. Rebuild only with an explicit migration.')
 groups = {}
 for p in sorted((ROOT / 'mi-notes').rglob('*.md')):
     if any(x in p.parts for x in ['分析', '.cache', 'assets']):
